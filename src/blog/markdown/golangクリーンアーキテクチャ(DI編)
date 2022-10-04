@@ -1,0 +1,112 @@
+---
+title: 'golangクリーンアーキテクチャ(DI編)'
+date: '2022-10-04'
+tags: "golang,DI,アーキテクチャ"
+---
+
+# 特に便利な機能のないgolang
+golangにはWebフレームワークにある便利なDI機能のようなものはなく、愚直にコンストラクタで依存クラスを注入していくほかない。サーバーをnet/httpで立てた場合、ルートにマッチした先に転送されるのは(http.ResponseWriter, *http.Request)を引数に取る関数と決まっている。
+この関数をメソッドに持つ構造体をControllerとするなら、実装者がDIを行えるのはController以降となる。今回の場合、Controller以降はどう考えてもサービス層となってしまうのでDIはControllerの責務であると考えた。
+
+## Controllerでは何をすべきか
+Controllerにフレームワーク的な仕事が割り振られるため、基本的にそれ以外はUsecaseに任せることとした。UsecaseとControllerの間にはinput Boundaryが存在しており、クリーンアーキテクチャ的にはこの境界がアプリケーション層とドメイン層の境界であってくれると美しいのだろうが、その辺りの試行錯誤は今後のに残しておく。
+
+Controllerの責務は以下のようになった。ContextをRepositoryに注入するのはRedisの要求に従ってのことだが、恐らくは他のインフラサービスでも共通ではないかと見ている。
+- 認証
+- 依存性解決
+  - Presenter <- ResponseWriter
+  - Usecase <- Repository[], Presenter
+  - Repository <- Database Adapter(redis), Context
+- Database Adapterの初期化
+  - 認証情報の設定
+- DTOの初期化
+  - 入力バリデーションのエラーハンドリングを含む
+- エラーハンドリング
+
+なお、Contextはmain関数からControllerのコンストラクタに渡すようにした。
+
+```
+package controllers
+
+import (
+	"api_stub/controllers/http_middlewares"
+	"api_stub/dtos"
+	"api_stub/exceptions"
+	"api_stub/inputs"
+	"api_stub/outputs"
+	"api_stub/presenters"
+	"api_stub/redis_repositories"
+	"api_stub/repositories"
+	"api_stub/usecases"
+	"context"
+	"github.com/go-redis/redis/v9"
+	"io/ioutil"
+	"net/http"
+	"os"
+	"strconv"
+)
+
+type MainController interface {
+	Help(http.ResponseWriter, *http.Request)
+	Set(http.ResponseWriter, *http.Request)
+	Get(http.ResponseWriter, *http.Request)
+	List(http.ResponseWriter, *http.Request)
+	Clear(http.ResponseWriter, *http.Request)
+	Init(http.ResponseWriter, *http.Request)
+}
+
+type mainController struct {
+	a http_middlewares.Auth
+	ctx context.Context
+	r *redis.Client
+}
+
+func NewMainController(ctx context.Context) (*mainController, error) {
+	rh := os.Getenv("REDIS_HOST")
+	rp, err := strconv.Atoi(os.Getenv("REDIS_PORT"))
+	if err != nil {
+		return nil, exceptions.NewLogicalException("environment REDIS_PORT is invalid.")
+	}
+	rwp := os.Getenv("REDIS_PASSWORD")
+	rd, err := strconv.Atoi(os.Getenv("REDIS_DB"))
+	if err != nil {
+		return nil, exceptions.NewLogicalException("environment REDIS_DB is invalid.")
+	}
+
+	return &mainController{a: http_middlewares.NewAuth(), ctx: ctx, r: InitRedis(rh, rp, rwp, rd)}, nil
+}
+
+func (mc *mainController) Set(w http.ResponseWriter, r *http.Request) {
+	repos := map[string]interface{}{
+		repositories.Message: redis_repositories.NewRedisMessageRepository(mc.ctx, mc.r),
+	}
+
+	var out outputs.SetOutput = presenters.NewSetPresenter(w)
+	var in inputs.SetInput = usecases.NewSetUsecase(repos, out)
+
+	b, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		ShowError(w, exceptions.NewValidationException(exceptions.ValidationExceptionDefault))
+		return
+	}
+
+	params, err := InitParam(r)
+	if err != nil {
+		ShowError(w, exceptions.NewRoutingException(exceptions.RoutingExceptionDefault))
+		return
+	}
+	params["data"] = string(b)
+
+	dto, err := dtos.NewSetDto(params)
+	if err != nil {
+		ShowError(w, err)
+		return
+	}
+
+	err = in.Handle(dto)
+	if err != nil {
+		ShowError(w, err)
+	}
+}
+...
+```

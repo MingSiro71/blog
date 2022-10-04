@@ -1,0 +1,101 @@
+---
+title: 'Workerの奇妙な労働環境'
+date: '2020-01-01'
+tags: "JavaScript,Worker"
+---
+
+# この記事は
+Webブラウザはかつてのようにコンテンツの制御空間としてのWindowだけでなく、別プロセスで並行稼働するWorkerも扱うようになった。
+基本のWorkerの配備方法は、[MDN: 「Web Workerの使用」](https://developer.mozilla.org/ja/docs/Web/API/Web_Workers_API/Using_web_workers#%E5%B0%82%E7%94%A8%E3%83%AF%E3%83%BC%E3%82%AB%E3%83%BC_dedicated_worker)によれば
+
+```
+var myWorker = new Worker('worker.js');
+```
+である。Workerを呼び出すスクリプトと同じ階層に配置されたworker.jsを読み込んで専用ウェブワーカーとして作り出す。これだけ見るとWorkerがWindowの配下にある、つまり以下のような疑似コード
+
+```
+class Worker {
+    constructor(script) {
+        //
+    }
+}
+
+const myWorker = new Worker('worker.js');
+```
+
+のように、WorkerというオブジェクトのインスタンスがWindowの中で動いているかのように見える。
+
+だが、Workerは実際のところそうではない。普通にJavascriptの中でオブジェクトを扱う感覚とは異なるルールでWorkerを管理しなければならない。Workerがどういう関わりの中で実行されているのか考えながらWorkerの実装方法を調べようというというのが今回の趣旨である。
+
+# 断り書き
+
+## 表現について
+ワーカーに対して画面表示するコンテンツを構成するスクリプトはコンテンツスクリプトと呼ばれる。本来はコンテンツスクリプトが動作するメモリ空間のルートに当たるノードのオブジェクトがWindowであるが、本文中ではWorkerに対してコンテンツ側のプロセス自体もWindowと表現する。
+
+コンテンツ側のプロセスはブラウザ内で複数存在するが、簡便のために現在のアクティブタブのプロセスに話の焦点を絞る。そのため、単にWindowと表現した場合はアクティブタブのプロセスを示しているものとする。
+
+## 実行環境について
+開発および動作確認に使用するブラウザはGoogle Chromeとする。特に断りがない場合はVisual Studio CodeのLive serverを用いたlocalhostでの実行とする。
+
+## 内容の精度について
+コードの正確さについては実際にコードを動作させて期しているが、あくまで調べて動かしているレベルであるため、実装方法の妥当性や記述の精度は高くないことを述べておく。個別のケースでの実装方法などは特に海外記事に良いものがある。筆者もいくつか参考にして実装にあたった。
+
+# Workerの種類
+
+## Dedicated Worker
+最も単純なDedicated Workerは1つのWindowに対して、その処理を代行する目的で利用される。Javascriptのプロセスはシングルスレッドなので、並行して処理しておいてほしい計算やデータ交換なんかを別プロセスでさせたい場合にDedicated Workerに任せることが想定されている。
+
+## Shared Worker
+タブ間やページ遷移の前後でデータをやり取りしたい場合にShared workerが用意されている。単純にデータを共有したいだけならCookieやlocalstorageでもよいが、WebSocketやポーリングでバックエンドの変更を検知する機能をShared Worker1か所にまとめて、変更内容を各ページで使うという使用法があるらしい。(試したことはないが、有用そうである。)
+
+## Service Worker
+Windowとサーバの間にプロキシとして割り込むことができる。Cache API, Push APIという専用の機能を持つ。それぞれ、CDNのキャッシュサーバ的なふるまいでオフライン状態のクライアントにコンテンツを返したり(いわゆるPWAができる)、プッシュ通知をWebコンテンツに実装するための機能。
+
+## Chrome拡張機能のバックエンド
+Chromeの拡張機能でバックグラウンド実行されるJavascriptプロセスはもともと独自実装だったと思われるが、Ｍanifest V3からはService Workerになった。しかし、Service WorkerだといってもAPIは通常のService Workerとは別なので、別扱いとする。
+
+# Workerの確認方法
+まず、Workerの動きを確認する方法を整理しておこう。ブラウザはChromeを利用する前提だ。
+
+Workerの中にconsole.logなどのログ出力を埋め込んだ場合、WorkerがWindowと関連付いていれば、タブの検証ツールからConsoleを開いて確認できる。
+
+また、Window側の検証ツールには関連づけられたWorkerをApplicationタブのApplication > Service Worker**TODO: サービスワーカー以外だとどうなる？** やSourcesタブの中で確認することができる。
+
+サービスワーカーの場合、次のURLからChromeが読み込んだものの一覧が確認、デバッグできる。
+chrome://serviceworker-internals/
+
+その他、メニューバーから「その他の機能」 > 「タスクマネージャ」でタブの一覧に混じってWorkerプロセスが存在すれば表示されるので、こちらでも存在確認が可能である。
+
+# Dedicated workerに仕事をさせる
+
+# Shared workerに仕事をさせる
+
+# Service workerに仕事をさせる
+
+## 登録する
+
+## 登録してすぐ指示を出す
+
+## 指示を送る
+
+## 報告を受ける
+
+# Chrome拡張機能のバックエンドに仕事をさせる
+
+## 登録する
+
+## 登録してすぐ指示を出す
+
+## 指示を送る
+
+## 報告を受ける
+
+# 困ったらここを読む
+- [MDN: Web Workers API](https://developer.mozilla.org/ja/docs/Web/API/Web_Workers_API)
+- [MDN: Web Worker の使用](https://developer.mozilla.org/ja/docs/Web/API/Web_Workers_API/Using_web_workers)
+- [MDN: WorkerGlobalScope](https://developer.mozilla.org/ja/docs/Web/API/WorkerGlobalScope)
+- [MDN: Worker](https://developer.mozilla.org/ja/docs/Web/API/Worker)
+- [MDN: SharedWorker](https://developer.mozilla.org/ja/docs/Web/API/SharedWorker)
+- [MDN: サービスワーカー API](https://developer.mozilla.org/ja/docs/Web/API/Service_Worker_API)
+- [MDN: サービスワーカーの使用](https://developer.mozilla.org/ja/docs/Web/API/Service_Worker_API/Using_Service_Workers)
+- [Github: GoogleChrome/chrome-extensions-samples](https://github.com/GoogleChrome/chrome-extensions-samples)

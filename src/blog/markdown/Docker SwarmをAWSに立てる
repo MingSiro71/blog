@@ -1,0 +1,354 @@
+---
+title: 'Docker SwarmをAWSに立てる'
+date: '2020-01-01'
+tags: "AWS,Docker,Docker Swarm"
+---
+
+# Docker Swarmの概要
+
+## マネージャとノード
+Docker Swarmはコンテナオーケストレーションツールの1種。マネージャとノードという2つの役割があり、マネージャはコントロールプレーンの機能を持つ。
+
+ただし、他のオーケストレーションツールのコントロールプレーンと異なり、マネージャ自身もノードとしてコンテナを抱えるほか、ノードが落ちた際に他の別のノードにコンテナを割り当てる程度のことしかしない。
+
+マネージャ以上の役割はconsul等のサードパーティ製ツールをSwarmネットワーク内のどこかにインストールして補うことが必要となっている。
+
+マネージャはRaftアルゴリズムを用いるため奇数が望ましいとされる。実際にマネージャを偶数にするとWarningが出るようになっており、運用の際は3つないし5つのマネージャを立てることが想定される。マネージャ自身がノードでもあるので、小規模の場合はマネージャ3機というケースが想定される。
+
+## サービスとingress
+マネージャはサービス毎に必要数のコンテナを立ち上げるようにプログラムされており、コンテナはサービスに対する通信をingressネットワークにより割り振られる。つまり自動的にロードバランサが配置される。ingressのロードバランシングで十分であれば、ロードバランサを別途立てる必要はない。
+
+# AWSインフラの設定
+
+## EC2インスタンスを立てる
+領域はAZ=a1のパブリックネットワークとした。private領域に立てたかったのだが、privateサブネットからアウトバウンドの経路を確保するためにはインターネットゲートウェイまたはその他のエンドポイントを作る必要があり、費用がかかってしまう為断念。
+- タグ
+  - Name: Sandbox-***
+    - swarm-manager-0: プライマリマネージャ
+    - swarm-manager-1: セカンダリマネージャ
+    - swarm-manager-2: セカンダリマネージャ
+    - swarm-node-1: ノード
+    - swarm-node-2: ノード
+  - Unit: Sandbox
+- OSイメージ: AL2 64(x86)
+- タイプ: t2 micro(無料利用枠の対象)
+- セキュリティグループ: Sandbox-public-web-maintenance
+- キーペア
+  - Sandbox内で共通のキー(Sandbox-master-key)を設定する。
+  - タイプ: RSA
+  - 拡張子: pem
+  - キーがダウンロードされるので、保存してパーミッションを400に変更。
+
+- パブリック IP の自動割り当て: 有効化
+  - 後で逐一割り当ててもよい
+  - このIPはインスタンス再起動ごとに可変なので、サンドボックス的にはさほど嬉しくない
+- ストレージ: 最小の8BiBでEBSボリュームを構築
+  - 合計30GiBまでは無料の範囲だが、それを越えても1GiB辺り月額0.08$なのでOK
+
+## セッションマネージャ
+**費用が掛かるのであきらめた**
+
+[AWS: 『Session Manager のセットアップ』](https://docs.aws.amazon.com/ja_jp/systems-manager/latest/userguide/session-manager-getting-started.html)
+
+以下のような流れで利用可能になる。
+- Session Manager APIに向けたエンドポイントを作成
+- IAMロールを作成、セッションマネージャに関する権限を許可してEC2インスタンスに割り振る
+  - ユーザに割り振るわけではないので注意
+- システムマネージャのクイックセットアップを実行
+
+セッションマネージャ用の必須のエンドポイント以下の4つ
+- com.amazonaws.region.ssm
+- com.amazonaws.region.ec2messages
+- com.amazonaws.region.ssmmessages
+- com.amazonaws.region.s3
+これらを全て建てると料金がかさみ、通常はpublic領域に踏み台EC2を立てた方が安く済む。
+
+参考: [DevelopersIO: 『そのセッションマネージャー、本当に必要？プライベートサブネットのEC2への通信方法を考えてみる』](https://dev.classmethod.jp/articles/patterns-about-access-ec2-on-private-subnet/)
+
+##  リーチャビリティアナライザ
+リソース間の接続が通らない場合、どこでスタックしているか分析できる。VPCコンソールの中に入っている。リソースからリソースの間のパスを設定したものを保存し、保存された設定を用いて分析を行う。
+
+設定を所有しているだけでは無料だが、分析の度に0.10USD(2022/10/03 現在)がかかる。それなりに高いので注意。
+
+# インストール・セットアップ
+## Docker Engineインストール
+Docker SwarmはAmazon Linux 2の場合、Docker Engineに同梱されている様子。
+
+```
+sudo amazon-linux-extras install -y docker
+sudo systemctl enable --now docker && systemctl is-enabled docker && systemctl status docker
+docker run hello-world
+# この段階ではパーミッションの関係でエラーになる
+```
+
+## ユーザ設定
+作業ユーザにdockerの実行権限を与える。
+```
+grep docker /etc/group
+sudo usermod -a -G docker ec2-user
+```
+
+ログアウトして再ログイン後、再度docker runを試す。
+
+```
+docker run hello-world
+# 今度は成功する
+```
+
+## Swarmマネージャの作成
+以下のコマンドで最初のマネージャを立ち上げる。
+```
+docker swarm init --advertise-addr <manager-0 IP>
+# 以下のようなトークンを含むメッセージが出力される
+To add a worker to this swarm, run the following command:
+
+    docker swarm join --token <node token> <manager-0 IP>:2377
+
+To add a manager to this swarm, run 'docker swarm join-token manager' and follow the instructions.
+```
+
+指示に従ってノードを設定する。
+
+```
+# node-0
+docker swarm join --token <node token> <manager-0 IP>:2377
+```
+
+```
+# node-1
+docker swarm join --token <node token> <manager-0 IP>:2377
+```
+ノード用のトークンは以下のコマンドで確認できる。
+```
+docker swarm join-token worker
+```
+
+サブのマネージャを立ち上げる。
+
+```
+# manager-0
+docker swarm join-token manager
+# 以下のようにトークンが表示される
+To add a manager to this swarm, run the following command:
+
+    docker swarm join --token <manager token> <manager-0 IP>:2377
+```
+
+```
+# manager-1
+docker swarm join --token <token> <manager-0 IP>:2377
+```
+
+```
+# manager-2
+docker swarm join --token <token> <manager-0 IP>:2377
+```
+
+登録したノードの状態を確認。
+```
+docker node ls
+ID                            HOSTNAME                                        STATUS    AVAILABILITY   MANAGER STATUS   ENGINE VERSION
+3w6p2wzfa7flp5z02idm6bub9     ip-10-0-0-235.ap-northeast-1.compute.internal   Ready     Active                          20.10.17
+atqoukct4t4azfo7pprpyui18     ip-10-0-3-18.ap-northeast-1.compute.internal    Ready     Active         Reachable        20.10.17
+ik1o754n0xn19n8sugo6ae44z *   ip-10-0-3-183.ap-northeast-1.compute.internal   Ready     Active         Leader           20.10.17
+ll8v6mpxj9jioogxf92l68itg     ip-10-0-4-168.ap-northeast-1.compute.internal   Ready     Active                          20.10.17
+v2nfuds30yo33lfqplpolqp9p     ip-10-0-14-51.ap-northeast-1.compute.internal   Ready     Active         Reachable        20.10.17
+
+```
+
+## サービスをswarmに追加する
+```
+docker service create --replicas 1 --name helloworld alpine ping docker.com
+```
+
+alpineのdocker imageにping docker.comを渡してコンテナを作成。1種類のサービスに1つのレプリカが存在することが確認できる。このケースではnode-1でコンテナが立ち上がった。
+
+```
+docker service ls
+ID             NAME         MODE         REPLICAS   IMAGE           PORTS
+ka92leyw2nua   helloworld   replicated   1/1        alpine:latest
+
+docker service ps helloworld
+ID             NAME           IMAGE           NODE                                            DESIRED STATE   CURRENT STATE           ERROR     PORTS
+lzazrvblzj17   helloworld.1   alpine:latest   ip-10-0-0-235.ap-northeast-1.compute.internal   Running         Running 4 minutes ago
+```
+
+以下のコマンドでサービスを削除。
+```
+docker service rm helloworld
+```
+
+## 複製の数を増やして挙動を確かめる
+### 試験用イメージの作成
+コンテナ外から"curl localhost"すると、でdockerコンテナのIDが取得できるだけのWebサーバ内臓コンテナを作る。
+```
+docker run -d -p 80:80 php:apache
+docker exec -it 5f8734a5e46d /bin/bash
+echo "<?php" > index.php
+echo "echo 'I am ' . gethostname() . PHP_EOL;" > index.php
+apt update && apt install nano
+```
+
+応答を確認してOKならコミット。Docker hubに登録しておくとノードでインスタンスをpullして立ち上げてくれる。
+
+```
+docker login
+docker commit 5f8734a5e46d mingsiro71/replyhost
+docker push mingsiro71/replyhost
+```
+
+### サービスを立てる
+
+```
+docker service create --replicas 8 --name reply --publish published=80,target=80 mingsiro71/replyhost
+docker service ps reply
+ID             NAME      IMAGE                             NODE                                            DESIRED STATE   CURRENT STATE            ERROR     PORTS
+vhnnw3m2jwzb   reply.1   mingsiro71/replyhost:latest   ip-10-0-3-18.ap-northeast-1.compute.internal    Running         Running 30 seconds ago
+o53q8wjmm0jh   reply.2   mingsiro71/replyhost:latest   ip-10-0-3-183.ap-northeast-1.compute.internal   Running         Running 46 seconds ago
+r6awxvrxtlz4   reply.3   mingsiro71/replyhost:latest   ip-10-0-4-168.ap-northeast-1.compute.internal   Running         Running 19 seconds ago
+qtk5hnul8ccu   reply.4   mingsiro71/replyhost:latest   ip-10-0-14-51.ap-northeast-1.compute.internal   Running         Running 31 seconds ago
+1fysxtkvseko   reply.5   mingsiro71/replyhost:latest   ip-10-0-0-235.ap-northeast-1.compute.internal   Running         Running 30 seconds ago
+xl2gelheygid   reply.6   mingsiro71/replyhost:latest   ip-10-0-3-18.ap-northeast-1.compute.internal    Running         Running 30 seconds ago
+53xv3tu2fdht   reply.7   mingsiro71/replyhost:latest   ip-10-0-3-183.ap-northeast-1.compute.internal   Running         Running 46 seconds ago
+l1gbtycjg06q   reply.8   mingsiro71/replyhost:latest   ip-10-0-0-235.ap-northeast-1.compute.internal   Running         Running 30 seconds ago
+```
+
+各ノードに均等に分散してコンテナが立てられることが分かる。また、実際にcurlでリクエストを投げてやると
+
+```
+curl localhost
+I am 33a882a6a259
+
+curl localhost
+I am a7bbf9a4e3b2
+
+...
+```
+
+こんな感じでロードバランシングが効いている。どうやら各コンテナが上がりきるまでタイムラグがある様子なので、監視機能は合った方が便利かも。
+
+## サービス間の通信を確認する
+
+同じイメージを使って追加で5個、別名で立ててインスタンス内から通信を試みる。
+```
+docker service create --replicas 5 --name reply2 mingsiro71/replyhost
+docker service ls
+ID             NAME      MODE         REPLICAS   IMAGE                             PORTS
+kz939p2szcun   reply     replicated   8/8        mingsiro71/replyhost:latest   *:80->80/tcp
+piyyj9bf7ylh   reply2    replicated   5/5        mingsiro71/replyhost:latest
+
+docker exec -it a6311f5020d9 /bin/bash
+curl reply
+# つながらない
+```
+
+今度はネットワークを作成して、ネットワーク上にサービスを展開する。
+
+```
+docker network create -d overlay my-overlay
+docker service create --replicas 5 --name reply --network my-overlay mingsiro71/replyhost
+docker service create --replicas 5 --name reply2 --network my-overlay mingsiro71/replyhost
+```
+
+こうするとどちらのコンテナも相手のコンテナと疎通することができる。外からの接続を考えずにコンテナ間でやり取りする分にはポート指定が不要。
+
+# 可用性のチェック
+## ノードを落としてみる
+
+1つのサービスを5つのレプリカで立ち上げた状態からノードを落とすと、代わりのレプリカが別のノードで立ち上がる。
+```
+docker service create --replicas 5 -p 8080:80 --name reply --network my-overlay mingsiro71/replyhost
+docker service ps reply
+ID             NAME      IMAGE                             NODE                                            DESIRED STATE   CURRENT STATE            ERROR     PORTS
+bg1niweytzwa   reply.1   mingsiro71/replyhost:latest   ip-10-0-4-168.ap-northeast-1.compute.internal   Running         Running 11 seconds ago
+pyr9gy4tz9qn   reply.2   mingsiro71/replyhost:latest   ip-10-0-14-51.ap-northeast-1.compute.internal   Running         Running 12 seconds ago
+y9ycol61ergj   reply.3   mingsiro71/replyhost:latest   ip-10-0-0-235.ap-northeast-1.compute.internal   Running         Running 12 seconds ago
+4ntx13c4kxry   reply.4   mingsiro71/replyhost:latest   ip-10-0-3-18.ap-northeast-1.compute.internal    Running         Running 12 seconds ago
+c90tewvduu6t   reply.5   mingsiro71/replyhost:latest   ip-10-0-3-183.ap-northeast-1.compute.internal   Running         Running 11 seconds ago
+
+# node-1を停止
+
+docker service ps reply
+ID             NAME          IMAGE                             NODE                                            DESIRED STATE   CURRENT STATE                ERROR     PORTS
+bg1niweytzwa   reply.1       mingsiro71/replyhost:latest   ip-10-0-4-168.ap-northeast-1.compute.internal   Running         Running about a minute ago
+pyr9gy4tz9qn   reply.2       mingsiro71/replyhost:latest   ip-10-0-14-51.ap-northeast-1.compute.internal   Running         Running about a minute ago
+jp0eytdnj0z2   reply.3       mingsiro71/replyhost:latest   ip-10-0-14-51.ap-northeast-1.compute.internal   Running         Running 10 seconds ago
+y9ycol61ergj    \_ reply.3   mingsiro71/replyhost:latest   ip-10-0-0-235.ap-northeast-1.compute.internal   Shutdown        Running about a minute ago
+4ntx13c4kxry   reply.4       mingsiro71/replyhost:latest   ip-10-0-3-18.ap-northeast-1.compute.internal    Running         Running about a minute ago
+c90tewvduu6t   reply.5       mingsiro71/replyhost:latest   ip-10-0-3-183.ap-northeast-1.compute.internal   Running         Running about a minute ago
+```
+
+## マネージャを落としてみる
+リーダーが変更され、レプリカも別のノードに割り当てられる。
+```
+docker node ls
+ID                            HOSTNAME                                        STATUS    AVAILABILITY   MANAGER STATUS   ENGINE VERSION
+3w6p2wzfa7flp5z02idm6bub9     ip-10-0-0-235.ap-northeast-1.compute.internal   Down      Active                          20.10.17
+atqoukct4t4azfo7pprpyui18     ip-10-0-3-18.ap-northeast-1.compute.internal    Ready     Active         Leader           20.10.17
+ik1o754n0xn19n8sugo6ae44z     ip-10-0-3-183.ap-northeast-1.compute.internal   Unknown   Active         Unreachable      20.10.17
+ll8v6mpxj9jioogxf92l68itg     ip-10-0-4-168.ap-northeast-1.compute.internal   Ready     Active                          20.10.17
+v2nfuds30yo33lfqplpolqp9p *   ip-10-0-14-51.ap-northeast-1.compute.internal   Ready     Active         Reachable        20.10.17
+
+docker service ps reply
+ID             NAME          IMAGE                             NODE                                            DESIRED STATE   CURRENT STATE                ERROR     PORTS
+bg1niweytzwa   reply.1       mingsiro71/replyhost:latest   ip-10-0-4-168.ap-northeast-1.compute.internal   Running         Running 59 seconds ago
+pyr9gy4tz9qn   reply.2       mingsiro71/replyhost:latest   ip-10-0-14-51.ap-northeast-1.compute.internal   Running         Running about a minute ago
+jp0eytdnj0z2   reply.3       mingsiro71/replyhost:latest   ip-10-0-14-51.ap-northeast-1.compute.internal   Running         Running about a minute ago
+y9ycol61ergj    \_ reply.3   mingsiro71/replyhost:latest   ip-10-0-0-235.ap-northeast-1.compute.internal   Shutdown        Running 6 minutes ago
+4ntx13c4kxry   reply.4       mingsiro71/replyhost:latest   ip-10-0-3-18.ap-northeast-1.compute.internal    Running         Running 56 seconds ago
+j47qujpxxqr6   reply.5       mingsiro71/replyhost:latest   ip-10-0-3-18.ap-northeast-1.compute.internal    Running         Running 29 seconds ago
+c90tewvduu6t    \_ reply.5   mingsiro71/replyhost:latest   ip-10-0-3-183.ap-northeast-1.compute.internal   Shutdown        Running 6 minutes ago
+```
+
+## マネージャを復活させる
+
+```
+docker node ls
+ID                            HOSTNAME                                        STATUS    AVAILABILITY   MANAGER STATUS   ENGINE VERSION
+3w6p2wzfa7flp5z02idm6bub9     ip-10-0-0-235.ap-northeast-1.compute.internal   Down      Active                          20.10.17
+atqoukct4t4azfo7pprpyui18     ip-10-0-3-18.ap-northeast-1.compute.internal    Ready     Active         Leader           20.10.17
+ik1o754n0xn19n8sugo6ae44z     ip-10-0-3-183.ap-northeast-1.compute.internal   Ready     Active         Reachable        20.10.17
+ll8v6mpxj9jioogxf92l68itg     ip-10-0-4-168.ap-northeast-1.compute.internal   Ready     Active                          20.10.17
+v2nfuds30yo33lfqplpolqp9p *   ip-10-0-14-51.ap-northeast-1.compute.internal   Ready     Active         Reachable        20.10.17
+```
+
+Reachableにはなるが、リーダーは入れ替わったまま運用されることが分かる。またノードは以下のように変更が発生しない。他の要因でノードの変更が起きない限り一度落ちてしまったノードの持ち主は手が空いた状態になる。
+
+```
+docker service ps reply
+ID             NAME          IMAGE                             NODE                                            DESIRED STATE   CURRENT STATE             ERROR     PORTS
+bg1niweytzwa   reply.1       mingsiro71/replyhost:latest   ip-10-0-4-168.ap-northeast-1.compute.internal   Running         Running 3 minutes ago
+pyr9gy4tz9qn   reply.2       mingsiro71/replyhost:latest   ip-10-0-14-51.ap-northeast-1.compute.internal   Running         Running 3 minutes ago
+jp0eytdnj0z2   reply.3       mingsiro71/replyhost:latest   ip-10-0-14-51.ap-northeast-1.compute.internal   Running         Running 3 minutes ago
+y9ycol61ergj    \_ reply.3   mingsiro71/replyhost:latest   ip-10-0-0-235.ap-northeast-1.compute.internal   Shutdown        Running 9 minutes ago
+4ntx13c4kxry   reply.4       mingsiro71/replyhost:latest   ip-10-0-3-18.ap-northeast-1.compute.internal    Running         Running 3 minutes ago
+j47qujpxxqr6   reply.5       mingsiro71/replyhost:latest   ip-10-0-3-18.ap-northeast-1.compute.internal    Running         Running 2 minutes ago
+c90tewvduu6t    \_ reply.5   mingsiro71/replyhost:latest   ip-10-0-3-183.ap-northeast-1.compute.internal   Shutdown        Shutdown 58 seconds ago
+```
+updateでも再配分されない。この辺は実際の運用時に考えもの。
+
+```
+docker service update reply
+docker service ps reply
+ID             NAME          IMAGE                             NODE                                            DESIRED STATE   CURRENT STATE            ERROR     PORTS
+bg1niweytzwa   reply.1       mingsiro71/replyhost:latest   ip-10-0-4-168.ap-northeast-1.compute.internal   Running         Running 6 minutes ago
+pyr9gy4tz9qn   reply.2       mingsiro71/replyhost:latest   ip-10-0-14-51.ap-northeast-1.compute.internal   Running         Running 6 minutes ago
+jp0eytdnj0z2   reply.3       mingsiro71/replyhost:latest   ip-10-0-14-51.ap-northeast-1.compute.internal   Running         Running 6 minutes ago
+y9ycol61ergj    \_ reply.3   mingsiro71/replyhost:latest   ip-10-0-0-235.ap-northeast-1.compute.internal   Shutdown        Running 12 minutes ago
+4ntx13c4kxry   reply.4       mingsiro71/replyhost:latest   ip-10-0-3-18.ap-northeast-1.compute.internal    Running         Running 6 minutes ago
+j47qujpxxqr6   reply.5       mingsiro71/replyhost:latest   ip-10-0-3-18.ap-northeast-1.compute.internal    Running         Running 6 minutes ago
+c90tewvduu6t    \_ reply.5   mingsiro71/replyhost:latest   ip-10-0-3-183.ap-northeast-1.compute.internal   Shutdown        Shutdown 4 minutes ago
+```
+
+# (参考)使用するポートについて
+```
+Open protocols and ports between the hosts
+The following ports must be available. On some systems, these ports are open by default.
+
+TCP port 2377 for cluster management communications
+TCP and UDP port 7946 for communication among nodes
+UDP port 4789 for overlay network traffic
+If you plan on creating an overlay network with encryption (--opt encrypted), you also need to ensure ip protocol 50 (ESP) traffic is allowed
+```
+2377/TCPはマネージャとの通信、7946/TCPはノード間の通信、4789/UDPはオーバーレイネットワークの通信に利用する、とある。
+実際にセキュリティグループでの制御は試していないが、プロダクションでギリギリまでポートを閉める際には要参照。

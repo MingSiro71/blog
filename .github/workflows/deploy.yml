@@ -1,0 +1,47 @@
+name: Build and Deploy via SSH
+on:
+  push:
+    branches:
+      - main
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Install node modules
+        run: npm i -y
+        working-directory: ./src/blog
+
+      - name: Build
+        run: npm run export
+        working-directory: ./src/blog
+
+      - name: Print Build Result
+        run: find ./out -type f
+        working-directory: ./src/blog
+
+      - name: Store SSH Key
+        run: >
+          mkdir ~/.ssh &&
+          echo "$SSH_SECRET_KEY" > ~/.ssh/key.pem &&
+          chmod 400 ~/.ssh/key.pem &&
+          ls ~/.ssh/key.pem
+        env:
+          SSH_SECRET_KEY: ${{ secrets.SSH_SECRET_KEY }}
+
+      - name: Store Known Host
+        run: echo "$KNOWN_HOST" > ~/.ssh/known_hosts
+        env:
+          KNOWN_HOST: ${{ secrets.KNOWN_HOST }}
+
+      - name: Deploy via SSH
+        run: >
+          scp -i ~/.ssh/key.pem -r
+          ./out/* ${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_DIRECTORY}
+        working-directory: ./src/blog
+        env:
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_DIRECTORY: ${{ secrets.DEPLOY_DIRECTORY }}

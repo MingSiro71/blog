@@ -1,0 +1,103 @@
+$base-color: #FFCF00;
+$main-color: #001853;
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  padding: 0;
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Oxygen,
+    Ubuntu, Cantarell, Fira Sans, Droid Sans, Helvetica Neue, sans-serif;
+  background-color: $base-color;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  html {
+    color-scheme: dark;
+  }
+  body {
+    color: white;
+    background: black;
+  }
+}
+
+.header {
+  height: 28px;
+  background-color: $main-color;
+  color: white;
+
+}
+
+.main {
+  max-width: 800px;
+  min-width: 280px;
+  margin-left: auto;
+  margin-right: auto;
+  padding: 0 2rem;
+}
+
+.content-body {
+  background-color: white;
+  opacity: 0.95;
+  border-radius: 4px;
+  padding: 1rem 1rem 3rem;
+  a:hover {
+    text-decoration: underline;
+  }
+}
+
+.footer {
+  position: fixed;
+  bottom: 0;
+  width: 100vw;
+  display: flex;
+  flex: 1;
+  padding: 0.5rem 0;
+  border-top: 1px solid darken($base-color, 10%);
+  background-color: $base-color;
+  justify-content: center;
+  align-items: center;
+}
+
+.section-title {
+  text-decoration: underline;
+}
+
+.tag-container {
+  display: inline-flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  padding: 0 0.5rem;
+  gap: 6px 0.25rem;
+}
+
+.tag-badge {
+  display: inline-block;
+  padding: 0 0.5rem;
+  border: 1px solid gray;
+  border-radius: 0.25rem;
+  background-color: lightgray;
+  font-size: 0.8rem;
+  &:hover {
+    text-decoration: none;
+  }
+}
+
+.markdown-content pre {
+  padding: 1rem;
+  background-color: lightgray;
+  overflow-x: auto;
+}
+
+.markdown-content code{
+  font-family:system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}

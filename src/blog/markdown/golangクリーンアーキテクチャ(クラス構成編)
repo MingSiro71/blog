@@ -1,0 +1,189 @@
+---
+title: 'golangクリーンアーキテクチャ(クラス構成編)'
+date: '2022-10-04'
+tags: "golang,アーキテクチャ,インターフェース"
+---
+
+# 大雑把な構成
+想定する構成要件は次のとおりである。
+- リクエストをドメインサービスに引き渡すクラスがある
+- 外側からドメインサービスへの境界はインターフェースを用いる
+- ドメインサービスは外側に対して入力を定義する
+- ドメインサービスは永続データのリポジトリを利用できる
+- ドメインサービスは外側の出力層にデータを渡す
+- ドメインサービスから外側への境界はインターフェースを用いる
+- 出力層はレスポンスを作成する
+
+これらに該当するクラスをそれぞれ以下の名前空間に割り当てる。
+
+- controllers
+- inputs
+- dto
+- repositories
+- presenters
+- outputs
+
+このうち、inputsとoutputsはinterfaceのみ定義する。
+
+クリーンアーキテクチャの実装においてgolangが有利と感じる点は、一方通行の処理が書きやすい点にある。golangのnet/httpはRubyのRackサーバやSymphonyなどと異なり、アプリケーション層の戻り値からではなくhttp.ResponseWriterへの書き込みからレスポンスを返却する。従って出力層はhttp.ResponseWriterを注入されていれば一方通行で出力まで完遂できる。
+
+(ただ、エラー時の出力に関しては出力層到達前にエラーになるケースを考えると、戻して処理させる方が楽そうである。)
+
+## Input, Output
+インターフェースのみであるInputとOutputは次のようなコードになる。
+
+./inputs/set_input.go
+```
+package inputs
+
+import (
+	"api_stub/dtos"
+)
+
+type SetInput interface {
+	Handle(dtos.SetDto) error
+}
+```
+
+./outputs/set_output.go
+```
+package outputs
+
+import (
+	"api_stub/vo"
+)
+
+type SetOutput interface {
+	Success(vo.Id)
+}
+```
+
+## DTO
+DTOはInput(実体はUsecase)に渡される。ここでControllerからの入力を検査してしまうようにした。
+```
+package dtos
+
+import (
+	"api_stub/dtos/validations"
+	"api_stub/vo"
+)
+
+type SetDto interface {
+	GetId() vo.Id
+	GetData() string
+}
+
+type setDto struct {
+	id   vo.Id
+	data string
+}
+
+func NewDummySetDto() SetDto {
+	return &setDto{id: vo.NewDummyId(), data: ""}
+}
+
+func NewSetDto(params map[string]interface{}) (SetDto, error) {
+	id, err := validations.GetSureId(params)
+	if err != nil {
+		return NewDummySetDto(), err
+	}
+
+	data, err := validations.GetSureData(params)
+	if err != nil {
+		return NewDummySetDto(), err
+	}
+
+	return &setDto{id: id, data: data}, nil
+}
+
+func (dto *setDto) GetId() vo.Id {
+	return dto.id
+}
+
+func (dto *setDto) GetData() string {
+	return dto.data
+}
+```
+
+## Usecase
+UsecaseはDTOを受け取り、Repositoryを操作してOutput(実体はPresenter)に必要な値を返す。
+```
+package usecases
+
+import (
+	"api_stub/dtos"
+	"api_stub/outputs"
+	"api_stub/repositories"
+)
+
+type SetUsecase struct {
+	repos map[string]interface{}
+	out   outputs.SetOutput
+}
+
+func NewSetUsecase(repos map[string]interface{}, out outputs.SetOutput) *SetUsecase {
+	return &SetUsecase{repos: repos, out: out}
+}
+
+func (uc *SetUsecase) Handle(dto dtos.SetDto) error {
+	id := dto.GetId()
+	data := dto.GetData()
+
+	repo := uc.repos[repositories.Message].(repositories.MessageRepository)
+	err := repo.Push(id, data)
+
+	if err != nil {
+		return err
+	}
+
+	uc.out.Success(id)
+	return nil
+}
+```
+
+## Presenter
+PresenterはUsecaseから値を受け取り、インターフェースに合わせた形式で出力する。この場合はhttp.ResponseWriterに出力して終了するが、HTTPレスポンスの出力層にもカスタマイズしうる。
+
+```
+package presenters
+
+import (
+	"api_stub/vo"
+	"encoding/json"
+	"fmt"
+	"net/http"
+)
+
+type setPresenter struct {
+	w http.ResponseWriter
+}
+
+func NewSetPresenter(w http.ResponseWriter) *setPresenter {
+	return &setPresenter{w: w}
+}
+
+func (p *setPresenter) Success(id vo.Id) {
+	res := map[string]string{"id": id.Tos()}
+	bytes, _ := json.Marshal(res)
+	fmt.Fprint(p.w, string(bytes))
+}
+```
+
+## Repository
+注入されたAdapter(今回の場合、Redis Client)を操作して永続データの読み書きを行う。実際にはAdapterがRDBだったり外部APIだったり変化しうるので、インターフェースを嚙ませるのがクリーンアーキテクチャとして正しい。Redis以外のAdapterを採用した場合と共通の望ましいインターフェースを身に着ける必要がある。
+
+```
+package repositories
+
+import (
+	"api_stub/vo"
+)
+
+type MessageRepository interface {
+	Push(vo.Id, string) error
+	Pop(vo.Id) (string, error)
+	List(vo.Id) ([]string, error)
+	Clear(vo.Id) error
+	Init() error
+}
+```

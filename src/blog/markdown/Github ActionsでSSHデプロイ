@@ -1,0 +1,169 @@
+---
+title: 'Github ActionsでSSHデプロイ'
+date: '2022-10-03'
+tags: "Github,Github Action,SSH,SCP"
+---
+
+# 前提
+以下を作業前の前提とする。
+- デプロイ対象はnext.jsのように静的ファイルのみで構成され、ビルドが成功する状態
+- デプロイ先のホストはWebサーバが稼働、静的コンテンツを配置することで配信が可能
+- デプロイ先のホストはSSHのポートが塞がっていない
+- github上にリポジトリが存在し、コードがpush済
+
+SSHでのデプロイを想定したサードパーティ製のActionが用意されているが、メンテナンスを考慮してそれらは利用しない。
+
+# 作業の流れ
+作業の流れを以下に記す。
+- プロジェクトにGithub Actionのworkflowを追加
+- workflowの追加を専用のブランチでコミット
+- プロジェクトにsecretを登録
+  - ssh秘密鍵を作成して登録
+  - known hostsを登録
+  - その他デプロイに必要なホストの情報を登録
+- 接続部分を記述してpush
+
+# 作業
+## プロジェクトにGithub Actionのworkflowを追加
+Githubのプロジェクト画面から"Actions"タブを選択して"New Workflow"をクリック。大量のテンプレートが表示されて分かりにくいが、"set up a workflow yourself"をクリックするとスルーできる。
+
+まずはビルド完了までworkflowを記述する。
+
+```
+name: Build and Deploy via SSH
+on:
+  push:
+    branches:
+      - main
+      - action-test
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Install node modules
+        run: npm i -y
+        working-directory: ./src/blog
+
+      - name: Build
+        run: npm run export
+        working-directory: ./src/blog
+
+      - name: Print Build Result
+        run: find ./out -type f
+        working-directory: ./src/blog
+```
+
+name属性はworkflowおよび各ステップの名称で、自由につけてよい。ただしgithub上で表示に使用されるので確認の際分かりやすい名前に。
+
+branchesにはmain以外にaction-testというブランチ名を設定しているが、これは次のステップでコミットする一時的なブランチ名。最終的には削除する。
+
+working-directory属性はstep毎にリセットされてしまうらしい。
+stepsの代わりにrunを利用すると1回の指定で同じディレクトリにとどまることができるようだが、一方でstepsにすると各ステップでの成功/失敗が確認できるためstepsを利用した。
+
+"Print Build Result"は生成されたファイルをGithub Actionsから確認するために設定。デプロイの完了には必要ではない。
+
+## workflowの追加を専用のブランチでコミット
+Github ActionsのGUIに従い、記述したworkflowをcommitする。commit先は"action-test"とした。
+以降、完成まではローカル側でこのブランチを引き込んで進める。
+
+```
+git fetch origin action-test
+git checkout action-test
+```
+
+## プロジェクトにsecretを登録
+以下の変数をシークレット変数として取り扱う。
+- SSH秘密鍵
+- ホスト鍵
+- ホスト名またはIP
+- SSHログインユーザ名
+- ホスト内のデプロイ先ディレクトリ
+
+シークレット変数の登録はプロジェクトの"Settings"タブから"Secrest">"Actions"を選択、"New Repository Secret"をクリックして変数毎に変数名と値を入力する。人の手を介するSSH接続ではホスト鍵がなくても標準入力から確認を行えばよいが、自動で行う場合はあらかじめ入れておく必要がある。
+
+### SSH秘密鍵
+今回は専用にパスフレーズなしの秘密鍵を用意する。ホスト側で鍵を生成して公開鍵をauthorized_keysに登録。
+```
+cd ~/.ssh
+ssh-keygen -t rsa -b 4096
+# ファイル名を入力、ここではkey.pemとする
+cat key.pem.pub >> authorized_keys
+cat key.pem
+# 秘密鍵をコピー
+```
+
+"New Repository Secret"で変数名を"SSH_SECRET_KEY"とし、値にコピーした秘密鍵を張り付ける。
+
+### デプロイ先ホストに関するホスト鍵
+ホストのknown host情報は次のコマンドで取得できる
+
+```
+ssh-keyscan -H <デプロイ先のホスト>
+```
+
+"New Repository Secret"で変数名を"KNOWN_HOST"とし、値にコピーしたホスト鍵を張り付ける。
+
+### その他デプロイに必要なホストの情報
+"New Repository Secret"から次のように変数をセットする。
+- DEPLOY_HOST: デプロイ先のホスト名またはIP
+- DEPLOY_USER: SSHでログインするユーザ名
+- DEPLOY_DIRECTORY: ファイルをデプロイするディレクトリのパス
+
+## 接続部分を記述してpush
+workflowに記述を追加する。workflowの定義ファイルは.github/workflows/以下にある。
+
+```
+      - name: Store SSH Key
+        run: >
+          mkdir ~/.ssh &&
+          echo "$SSH_SECRET_KEY" > ~/.ssh/key.pem &&
+          chmod 400 ~/.ssh/key.pem &&
+          ls ~/.ssh/key.pem
+        env:
+          SSH_SECRET_KEY: ${{ secrets.SSH_SECRET_KEY }}
+
+      - name: Store Known Host
+        run: echo "$KNOWN_HOST" > ~/.ssh/known_hosts
+        env:
+          KNOWN_HOST: ${{ secrets.KNOWN_HOST }}
+
+      - name: Deploy via SSH
+        run: >
+          scp -i ~/.ssh/key.pem -r
+          ./out/* ${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_DIRECTORY}
+        working-directory: ./src/blog
+        env:
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_DIRECTORY: ${{ secrets.DEPLOY_DIRECTORY }}
+
+```
+
+少々冗長な書き方にも思えるが、このように
+- 鍵ファイルをsecret変数から取り出してファイルに作成
+- パーミッションを変更
+- ホスト鍵をsecret変数から取り出してknown_hostsを作成
+- SCPコマンドを実行
+
+という手順を取る必要がある。
+
+# 注意すべき点
+
+## ビルド環境におけるディレクトリ
+ビルド環境においては、カレントディレクトリはプロジェクトのルートディレクトリに対応している。ただ、そのディレクトリの絶対パスはworkflow実行ユーザのルートディレクトリとは異なる。従って./fooは~/fooと同じではない。
+
+また、.sshのようなディレクトリは最初から存在しないのでmkdirで作成する必要がある。といっても実際には使い捨て環境なのでホームディレクトリにおいてしまってSSH系コマンドで参照ファイルのパスをしていしてやってもよい。
+
+workflowが失敗した場合もログに標準出力がそのまま表示されるので、pwd等を差し込んで調べながら進めてもそこまで時間はかからない。
+
+## ホスト鍵
+ホスト鍵は普段あまり意識しない為、盲点。SSHコマンドではホスト鍵のチェックを省略するオプションがあり、こちらを紹介する記事も少なくはない。ホスト鍵認証は中間者攻撃回避に必要な手順であり、上記方法によって容易にチェックできるので省略は避ける。
+
+## コマンドの折り返し
+Github Actionのrun属性で指定するコマンドはバックスラッシュで折り返すことはできない。yamlに用意されているブロックスカラー記法で記述すると通るコマンドも、バックスラッシュで書いてしまうと変なエラーが出力されて原因が分かりにくい。
+
+## SCPコマンドの罠
+SCPコマンドは標準でファイルを転送するコマンドであり、ディレクトリの転送は-rオプションが必要。

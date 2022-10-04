@@ -1,0 +1,10 @@
+version: "3.9"
+services:
+  next:
+    build: ./infra/next
+    volumes:
+      - "./src:/usr/node/app"
+    ports:
+      - "3000:3000"
+    command: sh -c "npm run dev || node"
+    tty: true
