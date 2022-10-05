@@ -1,38 +1,47 @@
 ---
 title: 'golangクリーンアーキテクチャ(クラス構成編)'
 date: '2022-10-04'
-tags: "golang,アーキテクチャ,インターフェース"
+tags: "golang,アーキテクチャ"
 ---
 
-# 大雑把な構成
-想定する構成要件は次のとおりである。
-- リクエストをドメインサービスに引き渡すクラスがある
-- 外側からドメインサービスへの境界はインターフェースを用いる
-- ドメインサービスは外側に対して入力を定義する
-- ドメインサービスは永続データのリポジトリを利用できる
-- ドメインサービスは外側の出力層にデータを渡す
-- ドメインサービスから外側への境界はインターフェースを用いる
-- 出力層はレスポンスを作成する
+# 構成要件と名前空間
+想定する構成要件と対応付ける名前空間を次のように定めた。
+- リクエストをドメインサービスに引き渡すクラスがある -> controllers
+- 外側からドメインサービスへの境界はインターフェースを用いる -> inputs
+- ドメインサービスは外側に対して入力を定義する ->
+- ドメインサービスは永続データのリポジトリを利用できる -> repositories
+- 出力層はドメインサービスの外側でデータを受け取ってレスポンス出力する -> presenters
+- ドメインサービスから外側への境界はインターフェースを用いる -> outputs
 
-これらに該当するクラスをそれぞれ以下の名前空間に割り当てる。
+このうち、inputsとoutputsはinterfaceのみの定義となる。またrepositoriesはこれもinterfaceのみの定義であり、実体は対応するインフラ層とのアダプタになる。今回の場合はデータベースでありredisを利用しているため、redis_repositories名前空間に実装した。
 
-- controllers
-- inputs
-- dto
-- repositories
-- presenters
-- outputs
+## 命名規則
+golangのパッケージ(package)はここでの「名前空間」と対応させている。複数形で表記。
 
-このうち、inputsとoutputsはinterfaceのみ定義する。
+クラス(または、インターフェースまたは構造体)としては単数形のキャメルケースで表記する。例えばcontrollersに属するクラスはControllerとする。
 
+## golangのnet/httpの仕様と設計
 クリーンアーキテクチャの実装においてgolangが有利と感じる点は、一方通行の処理が書きやすい点にある。golangのnet/httpはRubyのRackサーバやSymphonyなどと異なり、アプリケーション層の戻り値からではなくhttp.ResponseWriterへの書き込みからレスポンスを返却する。従って出力層はhttp.ResponseWriterを注入されていれば一方通行で出力まで完遂できる。
 
 (ただ、エラー時の出力に関しては出力層到達前にエラーになるケースを考えると、戻して処理させる方が楽そうである。)
 
-## Input, Output
-インターフェースのみであるInputとOutputは次のようなコードになる。
+## (参考)golangの命名規則について
+言語仕様としてアッパーケースとローワ―ケースでは読み取られ方が異なるため、この使い分けは宣言する内容よりも仕様に従う。
 
+> Names are as important in Go as in any other language. They even have semantic effect: the visibility of a name outside a package is determined by whether its first character is upper case. It's therefore worth spending a little time talking about naming conventions in Go programs.
+
+アッパーケースならファイル外で参照可能、ローワ―ケースなら参照不能となる。従って、逆に参照可能にすべきものはアッパーケース、ファイル内にとどめたいものはローワ―ケース、という判断になる。
+
+golangにおける命名規則のガイドラインは
+[Effective Go](https://go.dev/doc/effective_go)にある。ただし、ここに表記されている内容以上に慣例としてよしとされているルールもあり、逆にEffective Goのルールに逆らうコードも一般的に存在しているようだ。
+
+例えば名前空間はEffective Goによれば「1単語にすべき」とあるが、実際にはアンダーラインで区切ることが多い。単数が望ましいと考える人もいるが、公式のパッケージにも複数形のパッケージはある。この辺りはチームで開発する場合どうするのか明確に決めておく必要があるだろう。
+
+# 各クラスの実装
+## Input
+Usecaseが実体となり、外に位置するクラスが呼び出す際のインターフェースのみ実装。
 ./inputs/set_input.go
+
 ```
 package inputs
 
@@ -45,7 +54,10 @@ type SetInput interface {
 }
 ```
 
+## Output
+Usecaseが外にデータを出力するインターフェースのみ実装。
 ./outputs/set_output.go
+
 ```
 package outputs
 
@@ -170,7 +182,7 @@ func (p *setPresenter) Success(id vo.Id) {
 ```
 
 ## Repository
-注入されたAdapter(今回の場合、Redis Client)を操作して永続データの読み書きを行う。実際にはAdapterがRDBだったり外部APIだったり変化しうるので、インターフェースを嚙ませるのがクリーンアーキテクチャとして正しい。Redis以外のAdapterを採用した場合と共通の望ましいインターフェースを身に着ける必要がある。
+Usecaseに提供するインターフェースのみ実装。
 
 ```
 package repositories
@@ -181,9 +193,39 @@ import (
 
 type MessageRepository interface {
 	Push(vo.Id, string) error
-	Pop(vo.Id) (string, error)
-	List(vo.Id) ([]string, error)
-	Clear(vo.Id) error
-	Init() error
+	...
 }
+```
+
+## RedisRepository
+Redis Clientを操作して永続データの読み書きを行う、Repositoryの実体を実装。
+
+```
+package redis_repositories
+
+import (
+	"api_stub/exceptions"
+	"api_stub/repositories"
+	"api_stub/vo"
+	"context"
+	"github.com/go-redis/redis/v9"
+)
+
+type redisMessageRepository struct {
+	ctx context.Context
+	db  *redis.Client
+}
+
+func NewRedisMessageRepository(ctx context.Context, db *redis.Client) repositories.MessageRepository {
+	return &redisMessageRepository{ctx: ctx, db: db}
+}
+
+func (repo *redisMessageRepository) Push(id vo.Id, s string) error {
+	err := repo.db.RPush(repo.ctx, id.Tos(), s).Err()
+	if err != nil {
+		return exceptions.NewDatabaseException(exceptions.DatabaseExceptionDefault)
+	}
+	return nil
+}
+...
 ```
