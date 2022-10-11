@@ -1,0 +1,300 @@
+---
+title: 'Flutterのデザインと配色'
+date: '2022-10-11'
+tags: "Flutter"
+---
+
+# Flutterのデザイン
+Flutterの画面を構成するWidgetは、Widgetの中で普通最も基底に配置されるApp Widgetの制約を受ける。特に通常はMaterialAppの利用が想定されており、この流れに乗った時点でマテリアルデザインのレールが敷かれることになる。
+
+マテリアルデザイン以外のデザインを無理やり組み立てることは不可能ではないが、おそらく非常に難しく面倒な作業になる。
+
+# Flutterにおける配色の基本
+## 確認用コード
+Flutterプロジェクトを立ち上げてmain.dartを以下のように記述する。MyAppのbuildにあるThemeDataの引数をコメントで変更すると配色パターンが変わるようになっている。
+
+```
+import 'package:flutter/material.dart';
+
+void main() {
+  runApp(const MyApp());
+}
+
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF9B7F4E),
+          brightness: Brightness.dark,
+        ),
+        // colorSchemeSeed: Color(0xFF9B7F4E),
+        // colorScheme: ColorScheme.fromSwatch(primarySwatch: Colors.amber),
+        // primarySwatch: Colors.amber,
+        // brightness: Brightness.dark,
+        // useMaterial3: true,
+      ),
+
+      title: 'Flutter Color Palette',
+      home: const Palette(),
+    );
+  }
+}
+
+class Palette extends StatelessWidget {
+  const Palette({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Flutter Color Palette'),
+      ),
+      body: Center(
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Column(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                SizedBox(
+                  child: ElevatedButton(
+                    child: const Text("ElavatedButton"),
+                    onPressed: () {},
+                  ),
+                ),
+                SizedBox(
+                  child: TextButton(
+                    child: const Text("TextButton"),
+                    onPressed: () {},
+                  ),
+                ),
+                SizedBox(
+                  child: IconButton(
+                    icon: const Icon(Icons.abc),
+                    onPressed: () {},
+                  ),
+                ),
+                const SizedBox(child: Text('Text')),
+                SizedBox(
+                  child: Checkbox(
+                    value: true,
+                    onChanged: (value) => {},
+                  ),
+                ),
+                SizedBox(
+                  child: Radio(
+                    value: true,
+                    groupValue: 'radio',
+                    onChanged: (value) => {},
+                  ),
+                ),
+                SizedBox(
+                  child: Slider(
+                    value: 0.5,
+                    onChanged: (value) => {},
+                  ),
+                ),
+                SizedBox(
+                  child: Switch(
+                    value: true,
+                    onChanged: (value) => {},
+                  ),
+                ),
+              ],
+            ),
+            Column(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                Container(
+                  color: Theme.of(context).colorScheme.background,
+                  padding: const EdgeInsets.fromLTRB(8.0, 8.0, 8.0, 8.0),
+                  child: Text("background & onBackground",
+                      style: TextStyle(
+                          color: Theme.of(context).colorScheme.onBackground)),
+                ),
+                Container(
+                  color: Theme.of(context).colorScheme.primary,
+                  padding: const EdgeInsets.fromLTRB(8.0, 8.0, 8.0, 8.0),
+                  child: Text("primary & onPrimary",
+                      style: TextStyle(
+                          color: Theme.of(context).colorScheme.onPrimary)),
+                ),
+                Container(
+                  color: Theme.of(context).colorScheme.secondary,
+                  padding: const EdgeInsets.fromLTRB(8.0, 8.0, 8.0, 8.0),
+                  child: Text("secondary & onSecondary",
+                      style: TextStyle(
+                          color: Theme.of(context).colorScheme.onSecondary)),
+                ),
+                Container(
+                  color: Theme.of(context).colorScheme.tertiary,
+                  padding: const EdgeInsets.fromLTRB(8.0, 8.0, 8.0, 8.0),
+                  child: Text("tertiary & onTertiary",
+                      style: TextStyle(
+                          color: Theme.of(context).colorScheme.onTertiary)),
+                ),
+                Container(
+                  color: Theme.of(context).colorScheme.error,
+                  padding: const EdgeInsets.fromLTRB(8.0, 8.0, 8.0, 8.0),
+                  child: Text("error & onError",
+                      style: TextStyle(
+                          color: Theme.of(context).colorScheme.onError)),
+                ),
+              ],
+            ),
+            Column(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+```
+
+## ColorScheme
+MaterialAppにはアプリのデザインを定める基底のプロパティ、Theme(: ThemeData)があり、ThemeDataには配色を定めるcolorScheme(: ColorScheme)が用意されている。
+
+ColorSchemeで定めた色は個別に上書きすることで上書きすることができるが、上書きしなくてもColorSchemeが良い感じに配色を管理してくれる、という設計になっている。確認用コードをビルドして確認すると、左側の列にあるWidgetに統一感のある配色が割り当てられていることが確認できる。
+
+ColorSchemeのコンストラクタは非常に多くのプロパティを要求する。primary, secondary, error, shadow...、しかしこれらも自動的に配分を作り出すための仕掛けがある。ファクトリメソッドのfromSeedやfromSwatch、またはcolorSchemeSeedやprimarySwatchといった応用プロパティを使うことでプロパティに色が割り当てられる。
+
+Flutterの色には1つの色を示すColorと、色見本を意味するSwatch(MaterialColor)がある。SwatchはたとえばColors.blueのように呼び出すと水色から濃いブルーまでの色のセットが得られるのがわかる。FlutterではこれをSwatchと呼んでいる。
+
+SeedまたはSwatchを設定することでColorSchemeが設定され、アプリ全体に統一感のある配色を設定するようになっている。
+
+## Brightness
+色にはライトモードとダークモードがあり、同じColorSchemeから2つの異なる配色が生成される。BrightnessはColorSchemeで定めることもできるし、ThemeDataに直接セットすることもできる。ただ、実際に動かしてみるとどちらにセットするのかによって結果が変わるようだ。
+
+## マテリアルデザイン3
+マテリアルデザイン3はアクセシビリティに強く配慮した新しいバージョンのマテリアルデザインで、FlutterのThemeDataではuseMaterial3をtrueに指定するとマテリアルデザイン3の配色に変化する。アクセシビリティ的にはこちらの方が優れた配色が作られるとされるが、デザインの問題なので実際にプロパティを有効にしてどのように変化するか見て考えたい。
+
+# Widgetの色をカスタマイズする
+ColorSchemeで配色されたWidgetはそのままでも問題なく使えるが、あくまで自動的に行われた配色に過ぎないのでイメージと合わないことは普通にありうる。ColorSchemeを参照するWidgetの色はどのように変更するのが良いのだろうか。
+
+## TextButtonの配色を調べる
+最終的にはbuildの戻り値に含まれているMaterialに色が設定されている。buildの中でreturnされているところを見ればわかるはずだ。text_button.dartのコードを読むと、まずbuildの実装はTextButtonになく親クラス側にあることがわかる、親クラスはButtonStyleButtonだ。
+
+```
+class TextButton extends ButtonStyleButton
+```
+
+button_style_button.dartを調べる。ButtonStyleButtonはStatefulWidgetで、State側のbuild()を読むとreturn部分はSemantictのchildに変数resultをセットしている。このresultに設定が書いてありそうだ。
+
+```
+    return Semantics(
+      container: true,
+      button: true,
+      enabled: widget.enabled,
+      child: _InputPadding(
+        minSize: minSize,
+        child: result,
+      ),
+    );
+```
+
+```
+    final Widget result = ConstrainedBox(
+      constraints: effectiveConstraints,
+      child: Material(
+        elevation: resolvedElevation!,
+        textStyle: resolvedTextStyle?.copyWith(color: resolvedForegroundColor),
+
+        ...
+
+        ),
+      ),
+    );
+```
+
+textStyleでテキストは一括指定がかかっているが、色に関してはresolvedForegroundColorとなっている。resolvedForegroundColorは以下のようになっている。
+
+```
+    final Color? resolvedForegroundColor = resolve<Color?>((ButtonStyle? style) => style?.foregroundColor);
+```
+
+関数resolveは、以下のようにwidget→themeStyleOf(contect)→defaultStyleOf(context)の順に調べて、設定があれば取得するだけの関数だ。何も指定がない時はdefaultStyleOf(context)のforegroundColorになる。
+```
+    final ButtonStyle? widgetStyle = widget.style;
+    final ButtonStyle? themeStyle = widget.themeStyleOf(context);
+    final ButtonStyle defaultStyle = widget.defaultStyleOf(context);
+    assert(defaultStyle != null);
+
+    T? effectiveValue<T>(T? Function(ButtonStyle? style) getProperty) {
+      final T? widgetValue  = getProperty(widgetStyle);
+      final T? themeValue   = getProperty(themeStyle);
+      final T? defaultValue = getProperty(defaultStyle);
+      return widgetValue ?? themeValue ?? defaultValue;
+    }
+
+    T? resolve<T>(MaterialStateProperty<T>? Function(ButtonStyle? style) getProperty) {
+      return effectiveValue(
+        (ButtonStyle? style) {
+          return getProperty(style)?.resolve(statesController.value);
+        },
+      );
+    }
+```
+
+defaultStyleOfはtext_button.dartでオーバーライドされていて、theme.colorScheme.primaryであるとわかる。
+
+```
+    final ThemeData theme = Theme.of(context);
+    final ColorScheme colorScheme = theme.colorScheme;
+
+    return Theme.of(context).useMaterial3
+      ? _TextButtonDefaultsM3(context)
+      : styleFrom(
+          foregroundColor: colorScheme.primary,
+
+          ...
+```
+とあるから、これもtheme.colorScheme.primaryであると分かる。なお、useMaterial3が有効だとまた違う値を参照していることもわかる。
+
+## カスタマイズの方針
+WidgetはColorSchemeがある場合、その中から決まった色を選んでいることが分かった。Widgetがデフォルトで参照する色と別の色を参照させたい場合はどうしたら良いのだろうか。
+
+先ほどのButtonStyleButtonの実装がヒントになる。widget→themeStyleOf(contect)→defaultStyleOf(context)という順に色を参照しているが、これは全体のColorSchemeよりもtextButtonTheme、textButtonThemeよりもwidgetへの直接指定の方が優先されるということである。
+
+## Widgetに対してThemeを充てる
+たとえば全てのチェックボックスWidgetに当てられる色を変更したい場合、次のようにThemeを指定する。
+
+```
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF9B7F4E),
+          brightness: Brightness.dark,
+        ),
+        checkboxTheme: CheckboxThemeData(
+          fillColor: MaterialStateColor.resolveWith(
+            (states) {
+              return ColorScheme.fromSeed(
+                seedColor: const Color(0xFF9B7F4E),
+                brightness: Brightness.dark,
+              ).primary;
+            },
+          ),
+        ),
+      ),
+```
+
+なお、チェックボックスなどのユーザーアクションを受け取るWidgetは直接色を指定するのではなく、MaterialStateColor.resolveWithに関数を設定する形での指定をする。設定する関数はWidgetの状態を表すstateを引数にとり、必要ならstateを条件に分岐させて色を返す形をとる。stateを参照せず条件分岐しなければ状況に関わらず同じ色を指定しているのと同義になる。
+
+## 個別に色を指定する
+個別のWidgetは色を含めてスタイルの指定を受けることができる。確認用コードでも次のようにコンテナに色を当てている。
+
+```
+                Container(
+                  color: Theme.of(context).colorScheme.primary,
+                  padding: const EdgeInsets.fromLTRB(8.0, 8.0, 8.0, 8.0),
+                  child: Text("primary & onPrimary",
+                      style: TextStyle(
+                          color: Theme.of(context).colorScheme.onPrimary)),
+                ),
+```
+MaterialAppの中に配置したWidgetに対してはTheme.of(context).colorSchemeでColorSchemeを呼び出して指定することができる。他にも色を呼び出す方法はいくつもあるが、ColorSchemeの中で充てる色を変更したいのであればこの方法で呼ぶとコードが綺麗に保たれるだろう。
