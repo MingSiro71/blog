@@ -1,0 +1,171 @@
+---
+title: 'Flutter Flowでサクッとレイアウト'
+date: '2022-10-12'
+tags: "Flutter,Flutter Flow"
+---
+
+# モチベーション
+Flutterはフロントエンド開発のツールとしてHTML & JavaScriptと比べると、レイアウトを組むためのコードがとにかく複雑だ。複雑になっている理由は以下のようなものがある。
+
+- Widgetの種類が多く粒度がまちまち
+  - AppBarといったレイアウトパーツからTextButtonやSliderといった入力部品まで同じWidget
+- Column, Row, Paddingなど位置関係だけ決めるWidgetがあり、ネストが深くなる
+- 子要素の合計サイズが親要素をはみ出すとエラーになる(Web向けビルドを除く)
+
+元々スマホアプリ開発はAndroid StudioにしてもXCodeにしてもGUIでのデザインが前提にある。そのためいきなりコードで書き始めてハードルが高くても問題がないのかもしれない。FlutterでGUI操作ができるGUIツールはないものか?
+
+# FlutterFlow
+https://flutterflow.io/
+レイアウトが直感的に組み立てられる。無料でも複数のページが作成でき、デザインテンプレートも用意されている。
+
+## ここで問題が
+Flutter Flowはコードの出力でマネタイズしており、無料版では完全なコードがダウンロードできない。無料版でもコードエディタからコードの編集と確認ができるのだが、内部的にFlutter Flowのライブラリに依存しているのでエディタのコードをコピーして動くようにはなっていない。
+
+専用ライブラリに依存しているのは以下のようなものだ。
+- スタイル: 配色やフォントなど
+- 一部のWidget: ボタン系など
+
+また、基本的に全てStatefulWidgetで出力されるのと、パーツごとにクラスで生成されずページコンポーネント状に巨大なコードが出来上がるので、手元のコードに移してから書き直す必要がある。色やフォントは完全に当て直しだ。
+
+## それでも
+何もないところから書くよりはありがたい。Flutterのコーディングに慣れていないうちは特にそうだろう。加えて小規模の開発で、デザインと完成品の見た目が全く一緒でなければならないとかでなければ、デザイン管理ツールの代わりにFlutter Flowでデザイン原案を作るというのも十分可能だろう。
+
+## 操作
+操作自体はドキュメントを読まずに使って慣れることができるレベルで作られている。アカウントを作成するとチュートリアルを始めることができるので、まずチュートリアルでWidgetの配置や主要プロパティの変更について触ってみるとよい。
+
+チュートリアルではページの追加に触れないが、ページについてはプロジェクトの開発画面に入って左サイドバーから"Page Selecter"を選択すればページの追加や複製に関する操作のUIが用意されている。
+
+# Flutter Flowからレイアウトを移植する
+とりあえずは空のdartファイルを、そこに丸ごと貼り付けてしまえば良い。このファイルがそのままページコンポーネントのクラスになる。
+たとえばFlutter FlowでHomeというページ名で作成していれば、home.dartを作ってコードを貼り付ける。
+
+```
+import '../flutter_flow/flutter_flow_google_map.dart';
+import '../flutter_flow/flutter_flow_icon_button.dart';
+import '../flutter_flow/flutter_flow_theme.dart';
+import '../flutter_flow/flutter_flow_util.dart';
+import '../flutter_flow/flutter_flow_widgets.dart';
+import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
+
+class HomeWidget extends StatefulWidget {
+  const HomeWidget({Key? key}) : super(key: key);
+
+  @override
+  _HomeWidgetState createState() => _HomeWidgetState();
+}
+
+class _HomeWidgetState extends State<HomeWidget> {
+
+...
+```
+
+以下のポイントを修正する。
+
+- 利用不能なimport文を削除
+- クラスの命名を修正
+- StetelessWidgetに修正
+
+3点目については単純なレイアウトだけの状態にしたいので修正するが、後々StatefulWidgetにする必要があると分かっている場合はそのままでも構わない。修正すると以下のようなコードになる。build関数は元々HomeWidgetStateに記述されていたものをそのまま持ってくる。
+
+```
+import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
+
+class Home extends StatelessWidget {
+  const Home({Key? key}) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+  ...
+```
+
+## google fontsをインストール
+Flutter Flowではgoogle fontsが利用されている。こちらは入手可能なライブラリなのでインストールすれば利用できる。この後の工程でフォントはリセットされてしまうが、Flutter Flowで作成したデザインを再現したい場合はインストールして設定しなおそう。
+
+```
+flutter pub add google_fonts
+```
+
+## スタイルのエラーを削除
+"FlutterFlowTheme"というクラスでスタイルが当てられている箇所がエラーになっている。このクラスを利用しているプロパティは丸ごと消してしまおう。あるいは、デフォルトテーマからの引き継ぎに切り替えると、デザインしたスタイルは当たっていないがFlutter Flowで特に設定した箇所がどこだったのかは目印になってくれる。
+
+```
+return Scaffold(
+  key: scaffoldKey,
+  resizeToAvoidBottomInset: false,
+  # backgroundColor: FlutterFlowTheme.of(context).primaryBackground,
+  # OR : backgroundColor: Theme.of(context).colorScheme.primaryContainer,
+```
+
+primaryBackgroundはFlutter Flow固有のプロパティなので、近しいプロパティとしてprimaryContainerを当てた。この辺りはColorSchemeクラスを参照。
+
+参考: [Flutterのデザインと配色](./Flutterのデザインと配色)
+
+## ボタン系Widgetの書き換え
+以下はFlutter Flowでテキストボタンを配置した時の生成コードだ。FFButtonWidgetというのがFlutter Flowのライブラリに依存していて動かない。
+
+```
+child: FFButtonWidget(
+  onPressed: () {
+    print('Button pressed ...');
+  },
+  text: 'OK',
+  options: FFButtonOptions(
+    width: 130,
+    height: 40,
+    color: FlutterFlowTheme.of(context).primaryColor,
+    textStyle: FlutterFlowTheme.of(context).subtitle2.override(
+          fontFamily: 'Poppins',
+          color: Colors.white,
+        ),
+    borderSide: BorderSide(
+      width: 1,
+    ),
+    borderRadius: BorderRadius.circular(8),
+  ),
+),
+```
+バニラのTextButtonの実装もonPressedにfunction、childに表示ラベルを要求するものなので、ボタンを当て込むだけなら以下のように直せば済む。
+
+```
+child: TextButton(
+  onPressed: () {
+    print('Button pressed ...');
+  },
+  child: Text('OK'),
+),
+```
+
+整形に関するオプションは少しややこしい。ボタン系の整形プロパティはstyleで以下のような書き方になる。
+
+```
+style: TextButton.styleFrom(
+  fixedSize: Size(130, 40),
+  side: BorderSide(width: 1),
+  backgroundColor: MaterialStateProperty.all(
+    Theme.of(context).colorScheme.primary
+  ),
+)
+```
+
+アイコンボタンについてもFlutterFlowIconButtonという利用できないクラスが使われている。こちらは以下のような感じに書き換えができる。
+
+```
+IconButton(
+  icon: Icon(
+    Icons.filter_alt,
+    color: Theme.of(context).colorScheme.onPrimary,
+    size: 36,
+  ),
+  onPressed: () {
+    print('IconButton pressed ...');
+  },
+)
+```
+styleでの指定もできるが、TextButtonよりも直感的に書けるプロパティもある。
+
+# 動作確認
+コードエディタ上でエラー表示が消えていることと、エミュレータで画面が表示できることを確認する。Webのエミュレータだとレイアウトが崩れていてもエラーが出ないので、AndroidかiOSの端末でエミュレートすること。無事に画面が表示されたらひとまずは移植完了。
+
+色やフォントなど細かいスタイルが当たっていないのでFlutter Flowで構築した通りには見えないかもしれないが、作業時間は短縮されているはずだ。
