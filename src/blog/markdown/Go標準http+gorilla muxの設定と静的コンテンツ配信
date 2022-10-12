@@ -1,0 +1,84 @@
+---
+title: 'Go標準http+gorilla muxの設定と静的コンテンツ配信'
+date: '2022-10-04'
+tags: "golang,gorilla/mux"
+---
+
+# Gorilla.muxとは
+golangの公式パッケージであるnet/httpはルーティングの仕組みを持ってはいるが、前方一致を取ってバインドされたハンドラに流し込むくらいのことしかしてくれない。
+
+```
+	http.Handle("/users", UserController.GetAll)
+	http.Handle("/", HomeController.Welcome)
+```
+
+例えば上記のような場合、サーバーが受け取ったパスの先頭が"/users"にマッチすればUserController.GetAllに、そうでなければHomeController.Welcomeに流れる。
+
+"/users/create"でも"/users/edit/1"でもUserController.GetAllに流れるし、パラメータを解釈してくれるような機能は当然のように持っていない。もちろんハンドラに渡されるhttp.Requestを解析すると実際のリクエストURLなどリクエスト情報全般が取得でき、そこからパースすれば適切な処理は書ける。
+
+いや、書けるのだがアプリケーションを書くライブラリとしては貧弱すぎる。
+
+そこでサードパーティ製ライブラリとして登場したGorilla.muxが重宝されている。Gorillaはパッケージの開発者名だ。なぜGorillaなのかはわからないが、Webアプリケーションに欲しい機能が付いたいいルーターである。ウホッ!
+
+# 基本の使い方
+基本的な使い方配下のようになる。コードはgithubのGorilla/mux公式からそのまま引っ張ってきた。
+
+```
+func main() {
+    r := mux.NewRouter()
+    r.HandleFunc("/", HomeHandler)
+    r.HandleFunc("/products", ProductsHandler)
+    r.HandleFunc("/articles", ArticlesHandler)
+    http.Handle("/", r)
+}
+```
+main.goのメイン関数にhttp.Handleから流し込むようにルーターをハンドラとして登録する。ハンドラは以下のようなインターフェースならなんでもよい。
+
+```
+type Handler interface {
+	ServeHTTP(ResponseWriter, *Request)
+}
+```
+
+ので、mux.Routerはこのようなインターフェースを持つHTTPミドルウェアとして考えることができる。
+
+# パラメータを使う
+Gorilla.muxはURLの一部をパラメータとして解釈してハンドラで使うような動きができる。
+
+```
+	router.HandleFunc("/set/{id}", controller.Set).Methods("POST")
+	router.HandleFunc("/get/{id}", controller.Get)
+	http.Handle("/", router)
+```
+idは以下のように取り出す。
+```
+# r *http.Request
+vars := mux.Vars(r)
+id := vars["id"]
+```
+
+# Gorilla/muxを使わないルートと併用する
+mux.RouterはHTTPミドルウェアであり、特定のルートに入った場合のみ対象とすることができる。逆に言えばnet.httpが別のハンドラに直接接続するルーティングを設定していれば、Gorilla.muxを使わないルーティングと共存させられる。
+
+Gorilla/muxを使いたくないパターンは、例えば静的コンテンツのディレクトリとファイルサーバを紐づける場合だ。Gorilla.muxのルーティングは完全一致なので、ディレクトリ以降のパスをURLパラメータとして使ってファイルサーバに渡して…と普通にnet/httpを使うよりも面倒になってしまう。
+
+そこで一部のパスをファイルサーバに、それ以外をGorilla/muxに割り当てる。
+
+```
+	router := mux.NewRouter()
+
+	router.HandleFunc("/set/{id}", controller.Set).Methods("POST")
+	router.HandleFunc("/get/{id}", controller.Get)
+	router.HandleFunc("/list/{id}", controller.List).Methods("GET")
+	router.HandleFunc("/clear/{id}", controller.Clear).Methods("PUT")
+	router.HandleFunc("/init", controller.Init).Methods("PUT")
+
+	// static roure
+    publicPath := filepath.Join(os.Getenv("APPROOT"), "public");
+	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir(publicPath))))
+
+	// register router
+	http.Handle("/", router)
+```
+
+なお、ファイルサーバにパスを指定する場合、開発環境とリリース環境でのパスの違いに注意。上のコードではos.Getenv("APPROOT")でパスを環境ごとに読み替えるようにしているが、いずれにしてもリリース環境で404が出たときに環境によりパスがずれることがある。

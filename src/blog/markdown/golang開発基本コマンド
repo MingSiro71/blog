@@ -1,0 +1,46 @@
+---
+title: 'golang開発基本コマンド'
+date: '2022-10-04'
+tags: "golang"
+---
+
+# リファレンス
+[Tutorial: Create a Go module](https://go.dev/doc/tutorial/create-module)
+[Go Modules Reference](https://go.dev/ref/mod)
+
+# プロジェクトを作る
+```
+go mod init [<組織名>/]<プロジェクト名>
+```
+組織名は"hentech.com"など"~~.com"の形式で表記するが、省略してもよい。省略すると"example.com"になる。
+
+以下のように空のgo.modが生成される。組織名がない場合、1行目はプロジェクト名だけになる。
+
+```
+module hentech.work/testmod
+
+go 1.19
+```
+
+# 依存パッケージを追加する
+```
+go get <パッケージ名>
+```
+
+[go get](https://go.dev/ref/mod#go-get)
+
+go installに移行していくような話もあるが、バイナリの保存と同時にgo modの編集を行うという面ではgo installと同じではない。go installの場合はバイナリの保存しかしない。
+
+# 開発サーバを動かす
+```
+go run main.go
+```
+
+エントリポイントであるmain.goを指定して開発サーバを動かす。synopsysだとファイル名ではなくてパッケージ名を引数に取ることになっているらしいが、エントリポイントのファイル指定で問題になることは普通なさそう。
+
+# バイナリをビルドする
+```
+go build [-o <出力先パス>] main.go
+```
+
+出力先はファイル名も含む。相対パスでよい。
