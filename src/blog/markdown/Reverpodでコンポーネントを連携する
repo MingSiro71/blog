@@ -1,0 +1,224 @@
+---
+title: 'Reverpodでコンポーネントを連携する'
+date: '2022-10-15'
+tags: "Flutter,Reverpod"
+---
+
+# Flutterにおける表示の制御
+フロントエンドのプログラムにはなんらかの方法で表示を変更する仕組みがある。HTML + JavaScriptならJavaScriptでDOM上のノードが持っている属性を書き換えると、HTMLが再描画されて表示が変わることになる。
+Flutterの場合、直接的にはWidgetに渡されるプロパティを変更すると再描画が発生する。プロパティを指定する変数は変更対象のWidgetの親Widgetが参照できる変数なら用いることができる。
+
+## フロントエンドにおける制御の設計
+Flutterの基本的な制御の実装においては親Widgetが持つ変数のセットをStateの拡張クラスとして閉じ込めておき、親Widgetが子Widgetを描画する際に子Widgetへの入力に対するハンドラ関数を定義し、ハンドラ関数の中で親Widgetの持つ変数のセットを入力に応じて変更させる、という方法がとられる。このようなWidgetがStatefulWidgetだ。
+
+ReactやVue.jsも同じで、Widgetに対応するのがコンポーネントだ。コンポーネントも親コンポーネントが変数のセットを管理して子コンポーネントの再描画に用いる。
+
+しかし、構成が複雑になると親子間だけで変数を共有するモデルでは大変だとわかり、全てのコンポーネントから参照できるデータストアという概念、およびライブラリが利用されるようになった。データストアは入力イベントのハンドラから値を受け取って自身を更新し、コンポーネントはデータストアの更新を検知して再描画を実行する。
+
+## FLutterにおけるデータストアとしてのRiverpod
+Flutterにおいてもデータストアを使った構成にしたいとなったとき、Riverpodがその候補にあたる。RiverpodはDart上でうまく機能するための独特な幾つかの概念を持っているが、詰まるところはコードのどこからでも更新と参照(変更検知を含む)が可能なデータストアとして機能する。
+
+# Riverpodの構成と利用方法
+Riverpodは幾つかの概念と、それに対応する以下のクラスで構成される。
+- Ref
+- Provider
+- StateNotifier
+これらのクラスが担っている機能と、拡張クラスや関連するクラスについて個別に見ていく。
+
+なお利用方法は単純にデータを更新して、それをWidgetの再描画に利用するところまでとする。
+
+## 準備
+RiverpodのProviderが利用できるのはProviderScopeというWidgetの中に限られている。アプリケーション全体でProviderを共有する場合は、MaterialAppの下に差し込む。
+
+```
+# lib/main.dart
+void main() {
+  runApp(
+    ProviderScope(
+      child: MaterialApp(
+        home: Home()
+      ),
+    ),
+  );
+}
+```
+
+## Ref
+RefはアプリケーションからRiverpodの世界にアクセスするためのゲートのようなオブジェクトである。以下のコードのようにRiverpodのプロバイダクラスを継承したクラスのインスタンスをRefオブジェクトのメソッドに渡すと、渡されたProviderに対応するデータストアの値にアクセスできるようになっている。
+
+```
+final sampleValue = ref.watch(sampleProvider);
+```
+
+RefオブジェクトはWidgetのbuildメソッド内部、またはProviderに指定する関数の内部に引数で渡る仕組みをもっていて、それぞれのRefを拡張したWidgetRef, ProviderRefというクラスのインスタンスという形で登場する。WidgetRefにしてもProviderRefにしてもRefインターフェースの実装クラスであり、使い方は同じになるように設計されている。
+
+Widgetで利用する場合は、利用するWidgetの基底クラスを必ずConsumerWidgetまたはConsumerStatefulWidgetにする。ConsumerWidgetとConsumerStatefulWidgetはそれぞれStatelessWidgetとStatefulWidgetを拡張しており、第2引数にWidgetRefインスタンスを取り込む仕組みが備わっている。
+
+```
+# lib/view/home.dart
+import '../state/counter.dart';
+
+class Home extends ConsumerWidget {
+  const Home({Key? key}) : super(key: key);
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final count = ref.watch(counterProvider);
+    return Text('$count');
+  }
+}
+```
+
+Provider側では以下のように、コンストラクタがRefインスタンスを引数にとる関数を要求するようになっている。
+
+```
+# lib/state/counter.dart
+final counterProvider = StateProvider<int>((ref) {
+  return 0;
+});
+```
+
+こちらは公式のコードをRefにクローズアップして簡略化した。公式のコードも同じだが、Refインスタンスは必ずしも関数内で利用されなくても良い。利用しなくても、上記の例では初期値0のint値がRiverpodの管理対象になる。Refインスタンスを利用するのは、さらに別のProviderに対応する値にアクセスしたい場合に限られる。
+
+## Provider
+ProviderはRiverpod内で1つの値を定義、管理する機能をもっている。たとえばRefの章で挙げた例をもう一度確認すると、counterProviderはint型で初期値0の値をRiverpod内に定めており、アプリケーションはRefにcounterProviderを渡すことでその値にアクセスする。
+
+```
+# lib/state/counter.dart
+final counterProvider = StateProvider<int>((ref) => 0);
+```
+
+```
+# lib/view/home.dart
+import '../state/counter.dart';
+
+class Home extends ConsumerWidget {
+  const Home({Key? key}) : super(key: key);
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final count = ref.watch(counterProvider);
+    return Text('$count');
+  }
+}
+```
+
+### Providerの種類とStateNotifier
+Providerは幾つかの種類がある。
+[Riverpod: 『プロバイダとは プロバイダの種類』](https://riverpod.dev/ja/docs/concepts/providers#%E3%83%97%E3%83%AD%E3%83%90%E3%82%A4%E3%83%80%E3%81%AE%E7%A8%AE%E9%A1%9E)
+
+最も基本となるプロバイダはStateNotifierProviderであり、StateNotifierProviderを使うまでもない場合にStateProviderやProviderを、StateNotifierProviderではカバーできない用途に他のProviderを利用する。
+
+StateNotifierProviderやStateProviderではWidgetがデータストアの変更を検知する際、ref.watch()は引数のProviderに.notifierというプロパティを付けて与えると、引数がデータストアの管理している値そのものではなく値にアクセスするインターフェースインスタンスになる。このインターフェースがStateNotifierというクラスだ。
+
+### StateNotifierProvider vs StateProvider
+まず、StateProviderでStateNotifierを取り出してみる。
+
+```
+# lib/view/home.dart
+import '../state/counter.dart';
+
+class Home extends ConsumerWidget {
+  const Home({Key? key}) : super(key: key);
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final count = ref.watch(counterProvider);
+    final counter = ref.watch(counterProvider.notifier); # StateNotifier
+    return Text('$count');
+  }
+}
+```
+
+上記のコードで変数counterの型はstringではなく、StateControllerというクラスだ。StateControllerはStateNotifierの拡張クラスとなっている。StateNotifierProviderの場合もStateNotifierの拡張クラスが得られるが、その拡張クラスを自分で定義できるようになる。
+
+```
+# lib/state/counter.dart
+final counterProvider = StateNotifireProvider<int>((ref) {
+  return CounrtNotifier();
+});
+
+class CounterNotifier extends StateNotifier {
+  CounterNotifier() : super(0);
+
+  int current() {
+    return state;
+  }
+}
+```
+
+上記の例ではCounterNotifierが自分で定義したStateNotifierで、current()という現在の値が取得できるメソッドを持っている。
+
+CounterNotifierの実装がシンプルすぎるので今のところ嬉しいことが何もないが、たとえば日付を管理する場合に出力と同時に幾つかのことなる書式で出力するためのメソッドを実装したり、Riverpodにはいくつかのパラメータを管理させておいて計算式の結果を取り出すメソッドを実装する、といったこともできる。
+
+また公式の見解としてはint, string, boolなどのプリミティブな型を扱う以外のケースでもStateNotifierProviderを使うべきとされている。
+
+### StateProvider vs Provider
+Providerはnotifierをプロパティに持っていない。従って取り出す値は常にRiverpodに入っている値そのものになるため、更新することができない。その時点でただのProviderはデータストアの値を管理する機能は持っていないと言える。まるっきり別物だ。
+
+Providerが利用されるのは、たとえば別のProviderから値を参照して別の値をアプリケーションに渡したい場合が挙げられる。以下のようなケースを考えてみる。
+
+- 値Aはtrueかfalseをとる
+- 値Bはtrueかfalseをとる
+- アプリケーションは値Aと値Bが共にtrueの場合のみ、画面に文字を表示する
+
+ConsumerWidgetで値Aと値BのStateProviderを監視している場合、値Aまたは値Bのどちらかが変更されると再描画が発生するが、false-falseのケースとtrue-falseのケースでは描画結果が同じなので再描画するだけ無駄に処理を発生させてしまう。
+
+新たにProviderが値Aと値BのStateProviderを監視し、その結果を値CとしてConsumerWidgetのチェック対象とする。
+
+- 値Cは値Aと値Bが共にtrueの場合のみtrue、それ以外はfalseをとる
+- アプリケーションは値Cがtrueの場合のみ、画面に文字を表示する
+
+すると以上のように処理系統が変化し、無駄な再描画が避けられる。
+
+しかし、いずれにしてもProviderは単体で使うものではなく、まずはStateNotifierProviderかStateProviderのどちらかを使うという判断になるだろう。
+
+## サンプルコード
+ここまでのコードでは初期値0が取り出せるだけで、何も嬉しくない。Riverpodのほとんどはここまでの内容で終わりだが、最後にカウントが上がるようにコードを完成させる。
+
+```
+# lib/main.dart
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import './view/home.dart';
+
+void main() {
+  runApp(
+    ProviderScope(
+      child: MaterialApp(
+        home: Home()
+      ),
+    ),
+  );
+}
+```
+
+```
+# lib/view/home.dart
+import '../state/counter.dart';
+
+class Home extends ConsumerWidget {
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final count = ref.watch(counterProvider);
+    final counter = ref.watch(counterProvider.notifier);
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Counter example')),
+      body: Center(
+          // Consumer is a widget that allows you reading providers.
+          child: Text('$count')),
+      floatingActionButton: FloatingActionButton(
+        // The read method is a utility to read a provider without listening to it
+        onPressed: () => counter.update((state) => state + 1),
+        child: const Icon(Icons.add),
+      ),
+    );
+  }
+}
+```
+
+```
+# lib/state/counter.dart
+final counterProvider = StateProvider<int>((ref) => 0);
+```
